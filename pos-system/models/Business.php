@@ -8,7 +8,7 @@ class Business extends BaseModel {
         parent::__construct();
     }
 
-    public function createBusiness($data) {
+    public function create($data) {
         try {
             // Validate required fields
             $requiredFields = ['name'];
@@ -18,7 +18,7 @@ class Business extends BaseModel {
                 }
             }
 
-            // Create the business with trial subscription
+            // Prepare business data with default values
             $businessData = [
                 'name' => $data['name'],
                 'tax_id' => $data['tax_id'] ?? null,
@@ -30,8 +30,8 @@ class Business extends BaseModel {
                 'status' => 'active'
             ];
 
-            // Create the business
-            $businessId = $this->create($businessData);
+            // Create the business using parent method
+            $businessId = parent::create($businessData);
 
             // Create default branch for the business
             $this->createDefaultBranch($businessId, $data['name']);
