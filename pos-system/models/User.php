@@ -8,7 +8,7 @@ class User extends BaseModel {
         parent::__construct();
     }
 
-    public function createUser($data) {
+    public function create($data) {
         try {
             // Validate required fields
             $requiredFields = ['username', 'email', 'password', 'role', 'business_id'];
@@ -36,8 +36,8 @@ class User extends BaseModel {
                 $data['status'] = 'active';
             }
 
-            // Create user
-            return $this->create($data);
+            // Create user using parent method
+            return parent::create($data);
         } catch (Exception $e) {
             throw new Exception("Failed to create user: " . $e->getMessage());
         }
@@ -158,8 +158,6 @@ class User extends BaseModel {
 
     public function setUserPermissions($userId, $permissions) {
         try {
-            $this->conn->beginTransaction();
-
             // Delete existing permissions
             $sql = "DELETE FROM user_permissions WHERE user_id = :user_id";
             $this->query($sql, ['user_id' => $userId]);
@@ -178,10 +176,8 @@ class User extends BaseModel {
                 $this->query($sql, $params);
             }
 
-            $this->conn->commit();
             return true;
         } catch (Exception $e) {
-            $this->conn->rollBack();
             throw new Exception("Failed to set user permissions: " . $e->getMessage());
         }
     }
