@@ -64,7 +64,9 @@ class AuthController {
 
     public function register($data) {
         try {
-            $this->userModel->beginTransaction();
+            // Get database connection from BaseModel
+            $db = Database::getInstance();
+            $db->beginTransaction();
 
             // Create business
             $businessData = [
@@ -78,7 +80,7 @@ class AuthController {
                 'status' => 'active'
             ];
 
-            $businessId = $this->businessModel->createBusiness($businessData);
+            $businessId = $this->businessModel->create($businessData);
 
             // Create admin user
             $userData = [
@@ -90,13 +92,13 @@ class AuthController {
                 'status' => 'active'
             ];
 
-            $userId = $this->userModel->createUser($userData);
+            $userId = $this->userModel->create($userData);
 
             // Set admin permissions
             $adminPermissions = USER_ROLES['admin']['permissions'];
             $this->userModel->setUserPermissions($userId, $adminPermissions);
 
-            $this->userModel->commit();
+            $db->commit();
 
             return [
                 'success' => true,
@@ -105,7 +107,9 @@ class AuthController {
                 'user_id' => $userId
             ];
         } catch (Exception $e) {
-            $this->userModel->rollBack();
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
             return [
                 'success' => false,
                 'message' => $e->getMessage()
