@@ -10,22 +10,19 @@ class Database {
             $dbname = getenv('DB_NAME') ?: 'pos_system';
             $username = getenv('DB_USER') ?: 'root';
             $password = getenv('DB_PASS') ?: '';
-            $charset = 'utf8mb4';
 
-            // DSN (Data Source Name)
-            $dsn = "mysql:host=$host;dbname=$dbname;charset=$charset";
+            // Create connection
+            $this->conn = mysqli_connect($host, $username, $password, $dbname);
 
-            // PDO options
-            $options = [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES => false,
-                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
-            ];
+            // Check connection
+            if (!$this->conn) {
+                throw new Exception("Connection failed: " . mysqli_connect_error());
+            }
 
-            // Create PDO instance
-            $this->conn = new PDO($dsn, $username, $password, $options);
-        } catch (PDOException $e) {
+            // Set charset
+            mysqli_set_charset($this->conn, "utf8mb4");
+            
+        } catch (Exception $e) {
             throw new Exception("Connection failed: " . $e->getMessage());
         }
     }
@@ -45,41 +42,82 @@ class Database {
 
     // Begin transaction
     public function beginTransaction() {
-        return $this->conn->beginTransaction();
+        return mysqli_begin_transaction($this->conn);
     }
 
     // Commit transaction
     public function commit() {
-        return $this->conn->commit();
+        return mysqli_commit($this->conn);
     }
 
     // Rollback transaction
     public function rollBack() {
-        return $this->conn->rollBack();
+        return mysqli_rollback($this->conn);
     }
 
     // Execute a query
     public function query($sql, $params = []) {
         try {
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute($params);
-            return $stmt;
-        } catch (PDOException $e) {
+            // If there are parameters, prepare and bind them
+            if (!empty($params)) {
+                $stmt = mysqli_prepare($this->conn, $sql);
+                if (!$stmt) {
+                    throw new Exception("Query preparation failed: " . mysqli_error($this->conn));
+                }
+
+                // Build types string for bind_param
+                $types = '';
+                $bindParams = [];
+                foreach ($params as $param) {
+                    if (is_int($param)) {
+                        $types .= 'i';
+                    } elseif (is_float($param)) {
+                        $types .= 'd';
+                    } else {
+                        $types .= 's';
+                    }
+                    $bindParams[] = $param;
+                }
+
+                // Create array of references for bind_param
+                $bindRefs = [];
+                $bindRefs[] = $types;
+                foreach ($bindParams as $key => $value) {
+                    $bindRefs[] = &$bindParams[$key];
+                }
+
+                // Bind parameters
+                call_user_func_array([$stmt, 'bind_param'], $bindRefs);
+
+                // Execute statement
+                if (!mysqli_stmt_execute($stmt)) {
+                    throw new Exception("Query execution failed: " . mysqli_stmt_error($stmt));
+                }
+
+                $result = mysqli_stmt_get_result($stmt);
+                mysqli_stmt_close($stmt);
+                return $result;
+            } else {
+                // Execute simple query without parameters
+                $result = mysqli_query($this->conn, $sql);
+                if ($result === false) {
+                    throw new Exception("Query failed: " . mysqli_error($this->conn));
+                }
+                return $result;
+            }
+        } catch (Exception $e) {
             throw new Exception("Query failed: " . $e->getMessage());
         }
     }
 
     // Get last inserted ID
     public function lastInsertId() {
-        return $this->conn->lastInsertId();
+        return mysqli_insert_id($this->conn);
     }
 
-    // Prevent cloning of the instance (Singleton pattern)
-    private function __clone() {}
-
-    // Prevent unserializing of the instance (Singleton pattern)
-    public function __wakeup() {
-        throw new Exception("Cannot unserialize singleton");
+    // Escape string
+    public function escapeString($value) {
+        return mysqli_real_escape_string($this->conn, $value);
     }
 
     // Helper method to build WHERE clause from conditions array
@@ -93,13 +131,12 @@ class Database {
 
         foreach ($conditions as $key => $value) {
             if (is_numeric($key)) {
-                // Raw condition (e.g., "column > :param")
+                // Raw condition
                 $where[] = $value;
             } else {
                 // Simple equality condition
-                $paramKey = str_replace('.', '_', $key);
-                $where[] = "$key = :$paramKey";
-                $params[$paramKey] = $value;
+                $where[] = "$key = ?";
+                $params[] = $value;
             }
         }
 
@@ -115,9 +152,8 @@ class Database {
         $params = [];
 
         foreach ($data as $key => $value) {
-            $paramKey = str_replace('.', '_', $key);
-            $set[] = "$key = :$paramKey";
-            $params[$paramKey] = $value;
+            $set[] = "$key = ?";
+            $params[] = $value;
         }
 
         return [
@@ -126,86 +162,19 @@ class Database {
         ];
     }
 
-    // Helper method to build INSERT query
-    public function buildInsertQuery($table, $data) {
-        $columns = implode(', ', array_keys($data));
-        $values = ':' . implode(', :', array_keys($data));
-
-        return "INSERT INTO $table ($columns) VALUES ($values)";
-    }
-
-    // Helper method to build UPDATE query
-    public function buildUpdateQuery($table, $data, $conditions) {
-        $set = $this->buildSetClause($data);
-        $where = $this->buildWhereClause($conditions);
-
-        $sql = "UPDATE $table SET {$set['set']} {$where['where']}";
-        $params = array_merge($set['params'], $where['params']);
-
-        return ['sql' => $sql, 'params' => $params];
-    }
-
-    // Helper method to build SELECT query
-    public function buildSelectQuery($table, $columns = '*', $conditions = [], $orderBy = '', $limit = '', $offset = '') {
-        $where = $this->buildWhereClause($conditions);
-        
-        $sql = "SELECT $columns FROM $table {$where['where']}";
-        
-        if ($orderBy) {
-            $sql .= " ORDER BY $orderBy";
+    // Close connection
+    public function close() {
+        if ($this->conn) {
+            mysqli_close($this->conn);
         }
-        
-        if ($limit) {
-            $sql .= " LIMIT $limit";
-            if ($offset) {
-                $sql .= " OFFSET $offset";
-            }
-        }
-
-        return ['sql' => $sql, 'params' => $where['params']];
     }
 
-    // Helper method to build DELETE query
-    public function buildDeleteQuery($table, $conditions) {
-        $where = $this->buildWhereClause($conditions);
-        return ['sql' => "DELETE FROM $table {$where['where']}", 'params' => $where['params']];
-    }
+    // Prevent cloning of the instance (Singleton pattern)
+    private function __clone() {}
 
-    // Helper method to check if a record exists
-    public function recordExists($table, $conditions) {
-        $where = $this->buildWhereClause($conditions);
-        $sql = "SELECT EXISTS(SELECT 1 FROM $table {$where['where']}) as exist";
-        $stmt = $this->query($sql, $where['params']);
-        return (bool)$stmt->fetch()['exist'];
-    }
-
-    // Helper method to count records
-    public function countRecords($table, $conditions = []) {
-        $where = $this->buildWhereClause($conditions);
-        $sql = "SELECT COUNT(*) as count FROM $table {$where['where']}";
-        $stmt = $this->query($sql, $where['params']);
-        return $stmt->fetch()['count'];
-    }
-
-    // Helper method to validate table name
-    public function validateTableName($table) {
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
-            throw new Exception("Invalid table name");
-        }
-        return $table;
-    }
-
-    // Helper method to validate column names
-    public function validateColumnNames($columns) {
-        if (is_array($columns)) {
-            foreach ($columns as $column) {
-                if (!preg_match('/^[a-zA-Z0-9_\.]+$/', $column)) {
-                    throw new Exception("Invalid column name: $column");
-                }
-            }
-            return implode(', ', $columns);
-        }
-        return $columns === '*' ? '*' : throw new Exception("Invalid columns parameter");
+    // Prevent unserializing of the instance (Singleton pattern)
+    public function __wakeup() {
+        throw new Exception("Cannot unserialize singleton");
     }
 }
 ?>
